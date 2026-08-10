@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "phylogfn-data"
 version = "0.1.0"
-description = "Protein-family preparation and ESM-2 encoding for conditional phylogenetic inference"
+description = "Residue-aware conditional GFlowNet for protein gene-tree topology inference"
 requires-python = ">=3.10"
 dependencies = [
   "numpy>=1.26",
@@ -16,6 +16,9 @@ esm = [
   "torch>=2.2",
   "transformers>=4.44,<5",
 ]
+gfn = [
+  "torch>=2.2",
+]
 dev = [
   "pytest>=8",
 ]
@@ -23,10 +26,16 @@ dev = [
 [project.scripts]
 prepare-phylo-data = "phylogfn_data.prepare:main"
 encode-esm2 = "phylogfn_data.esm2_encode:main"
+score-parsimony = "phylogfn_data.parsimony:main"
+train-phylogfn = "phylogfn_data.train:main"
+sample-phylogfn = "phylogfn_data.sample:main"
+simulate-phylo-data = "phylogfn_data.simulate:main"
+build-nj-tree = "phylogfn_data.baseline:main"
+compare-phylo-trees = "phylogfn_data.tree_metrics:main"
+score-likelihood = "phylogfn_data.likelihood:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-

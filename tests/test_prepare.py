@@ -59,6 +59,8 @@ class PrepareTests(unittest.TestCase):
     def test_deduplicate_exact_sequences(self) -> None:
         records = read_fasta(FIXTURES / "synthetic_family.fasta")
         self.assertEqual(len(deduplicate_records(records + [records[0]])), len(records))
+        identical_new_leaf = FastaRecord("new_taxon", "new_taxon", records[0].sequence)
+        self.assertEqual(len(deduplicate_records(records + [identical_new_leaf])), len(records) + 1)
 
     def test_prepare_pipeline_with_fake_aligner(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

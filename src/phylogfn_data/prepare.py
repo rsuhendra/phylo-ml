@@ -94,14 +94,12 @@ def stable_family_id(path: Path, source_root: Path) -> str:
 
 def deduplicate_records(records: list[FastaRecord]) -> list[FastaRecord]:
     seen_ids: set[str] = set()
-    seen_sequences: set[str] = set()
     kept: list[FastaRecord] = []
     for record in records:
         sequence = ungap(record.sequence)
-        if record.identifier in seen_ids or sequence in seen_sequences:
+        if record.identifier in seen_ids:
             continue
         seen_ids.add(record.identifier)
-        seen_sequences.add(sequence)
         kept.append(FastaRecord(record.identifier, record.description, sequence))
     return kept
 
