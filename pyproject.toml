@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phylogfn-data"
+version = "0.1.0"
+description = "Protein-family preparation and ESM-2 encoding for conditional phylogenetic inference"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+esm = [
+  "torch>=2.2",
+  "transformers>=4.44,<5",
+]
+dev = [
+  "pytest>=8",
+]
+
+[project.scripts]
+prepare-phylo-data = "phylogfn_data.prepare:main"
+encode-esm2 = "phylogfn_data.esm2_encode:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
