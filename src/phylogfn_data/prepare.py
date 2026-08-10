@@ -9,6 +9,7 @@ import statistics
 import subprocess
 import sys
 import tarfile
+import tempfile
 import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -33,6 +34,16 @@ class FamilyManifest:
     min_ungapped_length: int
     median_ungapped_length: float
     max_ungapped_length: int
+    gap_fraction: float
+    min_sequence_coverage: float
+    mean_sequence_coverage: float
+
+
+@dataclass(frozen=True)
+class PreparedCandidate:
+    manifest: FamilyManifest
+    staged_raw_fasta: Path
+    staged_aligned_fasta: Path
 
 
 def download_file(url: str, destination: Path, chunk_size: int = 1024 * 1024) -> None:
@@ -146,7 +157,70 @@ def run_mafft(input_fasta: Path, output_fasta: Path, threads: int, executable: s
     temporary.replace(output_fasta)
 
 
+def alignment_statistics(records: list[FastaRecord]) -> tuple[int, float, float, float]:
+    """Return alignment length, overall gap fraction, min coverage, and mean coverage."""
+    if not records:
+        raise ValueError("Alignment contains no sequences")
+    alignment_lengths = {len(record.sequence) for record in records}
+    if len(alignment_lengths) != 1:
+        raise ValueError("Alignment contains inconsistent sequence lengths")
+    alignment_length = alignment_lengths.pop()
+    if alignment_length == 0:
+        raise ValueError("Alignment has zero columns")
+
+    coverages = [len(ungap(record.sequence)) / alignment_length for record in records]
+    total_cells = len(records) * alignment_length
+    total_residues = sum(len(ungap(record.sequence)) for record in records)
+    gap_fraction = 1.0 - (total_residues / total_cells)
+    return alignment_length, gap_fraction, min(coverages), statistics.mean(coverages)
+
+
+def passes_alignment_filters(
+    *,
+    alignment_length: int,
+    gap_fraction: float,
+    min_sequence_coverage: float,
+    max_alignment_length: int | None,
+    min_gap_fraction: float,
+    max_gap_fraction: float,
+    min_sequence_coverage_required: float,
+) -> bool:
+    return (
+        (max_alignment_length is None or alignment_length <= max_alignment_length)
+        and min_gap_fraction <= gap_fraction <= max_gap_fraction
+        and min_sequence_coverage >= min_sequence_coverage_required
+    )
+
+
+def validate_prepare_arguments(args: argparse.Namespace) -> None:
+    source_dir = Path(args.source_dir)
+    if not source_dir.is_dir():
+        raise ValueError(f"Source directory does not exist: {source_dir}")
+    if args.min_taxa < 1 or args.max_taxa < args.min_taxa:
+        raise ValueError("Require 1 <= --min-sequences <= --max-sequences")
+    if args.threads < 1:
+        raise ValueError("--threads must be positive")
+    if args.max_families is not None and args.max_families < 1:
+        raise ValueError("--max-families must be positive")
+
+    max_alignment_length = getattr(args, "max_alignment_length", None)
+    if max_alignment_length is not None and max_alignment_length < 1:
+        raise ValueError("--max-alignment-length must be positive")
+    candidate_pool_size = getattr(args, "candidate_pool_size", None)
+    if candidate_pool_size is not None and candidate_pool_size < 1:
+        raise ValueError("--candidate-pool-size must be positive")
+
+    min_gap = getattr(args, "min_gap_fraction", 0.0)
+    max_gap = getattr(args, "max_gap_fraction", 1.0)
+    coverage = getattr(args, "min_sequence_coverage", 0.0)
+    if not 0.0 <= min_gap <= max_gap <= 1.0:
+        raise ValueError("Require 0 <= --min-gap-fraction <= --max-gap-fraction <= 1")
+    if not 0.0 <= coverage <= 1.0:
+        raise ValueError("--min-sequence-coverage must be between 0 and 1")
+
+
 def prepare_families(args: argparse.Namespace) -> int:
+    validate_prepare_arguments(args)
     source_dir = Path(args.source_dir)
     output_dir = Path(args.output_dir)
     raw_dir = output_dir / "raw"
@@ -154,11 +228,23 @@ def prepare_families(args: argparse.Namespace) -> int:
     manifest_path = output_dir / "manifest.jsonl"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    selected = 0
+    max_alignment_length = getattr(args, "max_alignment_length", None)
+    min_gap_fraction = getattr(args, "min_gap_fraction", 0.0)
+    max_gap_fraction = getattr(args, "max_gap_fraction", 1.0)
+    minimum_coverage = getattr(args, "min_sequence_coverage", 0.0)
+    rank_by_gap = getattr(args, "rank_by_gap", False)
+    candidate_pool_size = getattr(args, "candidate_pool_size", None)
+    if rank_by_gap and candidate_pool_size is None and args.max_families is not None:
+        candidate_pool_size = 4 * args.max_families
+
+    candidates: list[PreparedCandidate] = []
     skipped = 0
-    with manifest_path.open("w", encoding="utf-8") as manifest:
+    with tempfile.TemporaryDirectory(prefix=".phylo-candidates-", dir=output_dir) as staging_name:
+        staging_root = Path(staging_name)
         for source_path in discover_fastas(source_dir):
-            if args.max_families is not None and selected >= args.max_families:
+            if candidate_pool_size is not None and len(candidates) >= candidate_pool_size:
+                break
+            if not rank_by_gap and args.max_families is not None and len(candidates) >= args.max_families:
                 break
             try:
                 records = read_fasta(source_path)
@@ -177,15 +263,33 @@ def prepare_families(args: argparse.Namespace) -> int:
                     continue
 
                 family_id = stable_family_id(source_path, source_dir)
+                staged_raw_path = staging_root / "raw" / f"{family_id}.fasta"
+                staged_aligned_path = staging_root / "aligned" / f"{family_id}.fasta"
+                write_fasta(records, staged_raw_path)
+                run_mafft(staged_raw_path, staged_aligned_path, args.threads, args.mafft)
+
+                aligned_records = read_fasta(staged_aligned_path)
+                if {record.identifier for record in aligned_records} != {
+                    record.identifier for record in records
+                }:
+                    raise RuntimeError(f"MAFFT changed sequence identifiers for {family_id}")
+                alignment_length, gap_fraction, min_coverage, mean_coverage = alignment_statistics(
+                    aligned_records
+                )
+                if not passes_alignment_filters(
+                    alignment_length=alignment_length,
+                    gap_fraction=gap_fraction,
+                    min_sequence_coverage=min_coverage,
+                    max_alignment_length=max_alignment_length,
+                    min_gap_fraction=min_gap_fraction,
+                    max_gap_fraction=max_gap_fraction,
+                    min_sequence_coverage_required=minimum_coverage,
+                ):
+                    skipped += 1
+                    continue
+
                 raw_path = raw_dir / f"{family_id}.fasta"
                 aligned_path = aligned_dir / f"{family_id}.fasta"
-                write_fasta(records, raw_path)
-                run_mafft(raw_path, aligned_path, args.threads, args.mafft)
-
-                aligned_records = read_fasta(aligned_path)
-                alignment_lengths = {len(record.sequence) for record in aligned_records}
-                if len(alignment_lengths) != 1:
-                    raise RuntimeError(f"MAFFT output has inconsistent lengths: {aligned_path}")
                 lengths = [len(record.sequence) for record in records]
                 entry = FamilyManifest(
                     family_id=family_id,
@@ -193,22 +297,57 @@ def prepare_families(args: argparse.Namespace) -> int:
                     raw_fasta=str(raw_path),
                     aligned_fasta=str(aligned_path),
                     num_sequences=len(records),
-                    alignment_length=alignment_lengths.pop(),
+                    alignment_length=alignment_length,
                     min_ungapped_length=min(lengths),
                     median_ungapped_length=statistics.median(lengths),
                     max_ungapped_length=max(lengths),
+                    gap_fraction=gap_fraction,
+                    min_sequence_coverage=min_coverage,
+                    mean_sequence_coverage=mean_coverage,
                 )
-                manifest.write(json.dumps(asdict(entry), sort_keys=True) + "\n")
-                selected += 1
-                print(f"Prepared {family_id}: {len(records)} sequences", file=sys.stderr)
+                candidates.append(PreparedCandidate(entry, staged_raw_path, staged_aligned_path))
+                print(
+                    f"Candidate {family_id}: {len(records)} sequences, "
+                    f"{alignment_length} columns, {gap_fraction:.3f} gaps",
+                    file=sys.stderr,
+                )
             except (OSError, ValueError, RuntimeError) as error:
                 if args.strict:
                     raise
                 skipped += 1
                 print(f"Skipping {source_path}: {error}", file=sys.stderr)
 
-    print(f"Prepared {selected} families; skipped {skipped} files", file=sys.stderr)
-    return 0 if selected else 1
+        if rank_by_gap:
+            candidates.sort(
+                key=lambda candidate: (
+                    candidate.manifest.gap_fraction,
+                    candidate.manifest.family_id,
+                )
+            )
+        eligible_candidates = len(candidates)
+        if args.max_families is not None:
+            candidates = candidates[: args.max_families]
+
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        aligned_dir.mkdir(parents=True, exist_ok=True)
+        temporary_manifest = manifest_path.with_suffix(".jsonl.part")
+        with temporary_manifest.open("w", encoding="utf-8") as manifest:
+            for selection_rank, candidate in enumerate(candidates, start=1):
+                shutil.copy2(candidate.staged_raw_fasta, candidate.manifest.raw_fasta)
+                shutil.copy2(candidate.staged_aligned_fasta, candidate.manifest.aligned_fasta)
+                manifest_entry = asdict(candidate.manifest)
+                manifest_entry.update(
+                    {
+                        "selection_rank": selection_rank,
+                        "selection_policy": "lowest_gap" if rank_by_gap else "source_order",
+                        "eligible_candidates_considered": eligible_candidates,
+                    }
+                )
+                manifest.write(json.dumps(manifest_entry, sort_keys=True) + "\n")
+        temporary_manifest.replace(manifest_path)
+
+    print(f"Prepared {len(candidates)} families; skipped {skipped} files", file=sys.stderr)
+    return 0 if candidates else 1
 
 
 def add_prepare_arguments(parser: argparse.ArgumentParser) -> None:
@@ -226,6 +365,21 @@ def add_prepare_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-median-length", type=int, default=900)
     parser.add_argument("--max-length-ratio", type=float, default=2.5)
     parser.add_argument("--max-sequence-length", type=int, default=1022)
+    parser.add_argument("--max-alignment-length", type=int)
+    parser.add_argument("--min-gap-fraction", type=float, default=0.0)
+    parser.add_argument("--max-gap-fraction", type=float, default=1.0)
+    parser.add_argument(
+        "--min-sequence-coverage", type=float, default=0.0,
+        help="Minimum fraction of MSA columns occupied by every retained sequence",
+    )
+    parser.add_argument(
+        "--rank-by-gap", action="store_true",
+        help="Select the lowest-gap alignments from the candidate pool",
+    )
+    parser.add_argument(
+        "--candidate-pool-size", type=int,
+        help="Stop after this many post-alignment candidates before ranking",
+    )
     parser.add_argument("--max-families", type=int)
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--threads", type=int, default=1)
@@ -262,6 +416,12 @@ def build_parser() -> argparse.ArgumentParser:
     all_parser.add_argument("--max-median-length", type=int, default=900)
     all_parser.add_argument("--max-length-ratio", type=float, default=2.5)
     all_parser.add_argument("--max-sequence-length", type=int, default=1022)
+    all_parser.add_argument("--max-alignment-length", type=int)
+    all_parser.add_argument("--min-gap-fraction", type=float, default=0.0)
+    all_parser.add_argument("--max-gap-fraction", type=float, default=1.0)
+    all_parser.add_argument("--min-sequence-coverage", type=float, default=0.0)
+    all_parser.add_argument("--rank-by-gap", action="store_true")
+    all_parser.add_argument("--candidate-pool-size", type=int)
     all_parser.add_argument("--max-families", type=int)
     all_parser.add_argument("--seed", type=int, default=17)
     all_parser.add_argument("--threads", type=int, default=1)

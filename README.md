@@ -51,6 +51,36 @@ prepare-phylo-data all \
   --threads 8
 ```
 
+### Paper-like PANTHER training set
+
+The closest published PLM-phylogeny study used PANTHER 19 families with at
+least 20 sequences, fewer than 512 aligned positions, excluded alignments below
+10% gaps, and then selected the lowest-gap eligible families. To follow that
+processing while retaining our larger fresh-MAFFT training collection, use:
+
+```bash
+prepare-phylo-data all \
+  --data-root data \
+  --output-dir data/processed/panther_paper_like \
+  --min-sequences 20 \
+  --max-sequences 64 \
+  --min-median-length 80 \
+  --max-median-length 900 \
+  --max-length-ratio 2.5 \
+  --max-alignment-length 512 \
+  --min-gap-fraction 0.10 \
+  --rank-by-gap \
+  --candidate-pool-size 4000 \
+  --max-families 1000 \
+  --threads 8
+```
+
+The paper evaluated 500 fixed families using PANTHER-provided alignments and
+trees. This command instead selects 1,000 families from the first 4,000
+post-filter candidates after producing fresh MAFFT alignments. It is therefore
+a deliberately larger, paper-like training set rather than an exact reproduction
+benchmark. The exact 500-family benchmark should remain held out from training.
+
 For an already downloaded/extracted collection of family FASTA files:
 
 ```bash
@@ -65,7 +95,10 @@ prepare-phylo-data prepare \
 The preparation command recursively discovers `.fa`, `.faa`, `.fas`, and
 `.fasta` files. It removes exact duplicate sequences, rejects non-protein
 records, filters extreme family sizes/lengths, optionally subsamples large
-families deterministically, and calls MAFFT. It writes:
+families deterministically, and calls MAFFT. Optional post-MSA filters control
+alignment length, overall gap fraction, and minimum per-sequence coverage.
+`--rank-by-gap` ranks eligible candidates by increasing gap fraction before the
+final family limit is applied. It writes:
 
 ```text
 data/processed/
