@@ -6,8 +6,8 @@ from tempfile import TemporaryDirectory
 
 import numpy as np
 
-from phylogfn_data.parsimony import leaf_names
-from phylogfn_data.simulate import main, random_tree, simulate_sequences
+from phylogfn.phylo.parsimony import leaf_names
+from phylogfn.data.simulate import main, random_tree, simulate_sequences
 
 
 class SimulationTests(unittest.TestCase):

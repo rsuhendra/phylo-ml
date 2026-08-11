@@ -5,12 +5,29 @@ sample **unrooted protein gene-tree topologies** for previously unseen homologou
 families. It combines frozen ESM-2 residue embeddings, MSA-aware adaptation, and
 a bottom-up tree policy trained from phylogenetic rewards.
 
-The central design choice is important: **ESM embeddings are not mean-pooled at
-the model input.** Ungapped proteins are encoded by ESM-2, each residue is
-returned to its MSA column, homologs interact within aligned columns, and the
-adapted residue representations are processed along the sequence. Learned site
-weights pool them only after those operations. Plain per-protein ESM mean
-pooling remains available solely as an ablation baseline.
+The central design choice is important: **ESM embeddings are not pooled into one
+vector per protein.** Ungapped proteins are encoded by ESM-2, each residue is
+returned to its MSA column, and homologs interact within aligned columns. The
+model compares pairs at residue-matched sites and only then pools those
+comparisons into pairwise sequence evidence. Exact recursively updated Fitch
+features carry the parsimony-relevant state of every partial tree.
+
+## Source layout
+
+The import package is `phylogfn`; `src/` is the standard Python source-layout
+directory rather than part of the import name.
+
+```text
+src/phylogfn/
+  data/       FASTA/MSA preparation, ESM-2 encoding, features, simulation
+  model/      residue-pair adapter, forward policy, GFlowNet objective
+  phylo/      tree environment, rewards, baselines, topology metrics
+  train.py    multi-family training entry point
+  sample.py   checkpoint inference and topology sampling
+```
+
+The command-line programs retain their existing names, so scripts using
+`train-phylogfn`, `encode-esm2`, or the other commands do not need to change.
 
 ## Implemented pipeline
 
@@ -18,16 +35,18 @@ pooling remains available solely as an ablation baseline.
 2. Align each family with MAFFT while preserving distinct gene-tree leaves.
 3. Encode ungapped proteins with frozen ESM-2 and save residue-level embeddings.
 4. Scatter residues back onto the shared MSA coordinate system.
-5. Adapt features across homologs at each site and along each aligned protein.
-6. Construct an unrooted binary topology through reversible subtree merges.
+5. Adapt features across homologs and build masked leaf-pair evidence.
+6. Construct an unrooted binary topology through reversible merges while
+   updating exact protein Fitch features for every partial subtree.
 7. Train a family-conditioned forward policy and conditional partition function
    with the Trajectory Balance objective.
 8. Sample multiple topologies to represent uncertainty rather than returning
    only one greedy tree.
 
-The current rewards are normalized unordered amino-acid parsimony and a small
-Poisson-20 likelihood oracle. The latter uses one shared branch length and is a
-controlled development baseline, not a replacement for IQ-TREE with LG+Gamma.
+Training currently targets normalized unordered amino-acid parsimony. A small
+Poisson-20 likelihood oracle remains available as an independent diagnostic,
+but the Fitch-state policy is intentionally restricted to parsimony training;
+likelihood training requires recursively updated Felsenstein features.
 
 ## Installation
 
@@ -109,6 +128,13 @@ residue embeddings and `metadata.json` stores each protein's slice plus exact
 these maps to reconstruct a tensor with shape `[sequences, MSA columns,
 embedding dimension]`; gap positions are masked rather than encoded by ESM.
 
+The trainable adapter projects ESM features, adds explicit amino-acid identity,
+and attends across taxa independently within each MSA column. It deliberately
+uses neither absolute MSA-column embeddings nor a second Transformer along each
+sequence. For every leaf pair, symmetric residue comparisons are pooled only
+over columns at which both leaves contain residues, yielding a tensor shaped
+`[sequences, sequences, pair dimension]`.
+
 ## 3. Train the conditional GFlowNet
 
 ```bash
@@ -123,6 +149,27 @@ train-phylogfn \
   --device auto
 ```
 
+After every epoch, the trainer evaluates the validation families and prints one
+JSON record containing training loss plus held-out metrics. Validation defaults
+to four sampled trajectories per family and can be controlled independently:
+
+```bash
+train-phylogfn \
+  --embeddings-dir data/embeddings/esm2_t12_35M \
+  --output-dir runs/parsimony \
+  --epochs 20 \
+  --validation-every 1 \
+  --validation-trajectories-per-family 4 \
+  --selection-metric normalized-tb \
+  --device auto
+```
+
+Reported validation metrics include raw and per-action-normalized TB loss,
+mean/best/modal normalized parsimony, Neighbor-Joining parsimony, unique-topology
+fraction, normalized sample entropy, and taxon-count strata. Supplying
+`--reference-trees-dir trees/validation` additionally reports expected and
+modal normalized RF distance for matching `<family>.nwk` files.
+
 Families are deterministically assigned to train, validation, and test splits
 by family identifier. The same model processes different numbers of leaves, so
 training is conditionally amortized across families and taxon counts. Every
@@ -130,7 +177,11 @@ unrooted topology has a canonical representation rooted on the pendant edge of
 the lexicographically first leaf; that artificial root is only a representation
 device and does not turn the task into rooted-tree inference.
 
-The run directory contains `checkpoint.pt`, `metrics.jsonl`, and `splits.json`.
+The run directory contains the latest `checkpoint.pt`, validation-selected
+`best_checkpoint.pt`, complete `metrics.jsonl`, and `splits.json`.
+Checkpoints created by the earlier absolute-position/sequence-Transformer/
+pooled-leaf architecture are not compatible with this model and must be
+retrained.
 
 ## 4. Sample a posterior-like set of trees
 
@@ -143,12 +194,49 @@ sample-phylogfn \
   --device auto
 ```
 
-The output reports unique Newick topologies, sample frequencies, rewards, the
-learned conditional `log Z`, and MSA-site weights. These frequencies are model
-samples; calibration against known or high-quality reference trees must be
-measured rather than assumed.
+The output reports unique Newick topologies, sample frequencies, rewards, and
+the learned conditional `log Z`. These frequencies are model samples;
+calibration against known or high-quality reference trees must be measured
+rather than assumed.
+
+At each construction step, an action logit combines two branches. The ESM branch
+aggregates cross-subtree pair evidence plus each candidate's relationship to the
+fixed anchor and remaining forest. The Fitch branch compares the two partial
+trees' possible root amino-acid sets at every valid site and supplies the exact
+immediate normalized mutation cost. Once a merge is selected, its new Fitch
+state is computed deterministically by intersection when the child state sets
+overlap and union plus one mutation otherwise.
+
+Candidate pairs are scored as one vectorized tensor batch rather than through a
+Python loop. During a trajectory, the policy also carries tensorized Fitch
+states, subtree sizes, anchor-pair sums, and cross-subtree ESM sums forward after
+each merge. Only statistics involving the newly merged subtree are formed; the
+policy does not reconstruct unchanged partial subtrees from their leaves.
+Candidate logits whose two subtrees survive a merge are retained as part of the
+trajectory cache, so only logits involving the newly created subtree pass
+through the Fitch encoder and action network. During training, the Python tree
+environment carries topology only; accumulated Fitch scores are updated once in
+the tensor cache and provide the terminal parsimony reward. The independent CPU
+Fitch implementation remains the correctness oracle used by tests and scoring
+commands.
 
 ## Controlled experiments and baselines
+
+After model and checkpoint selection are fixed, evaluate the locked test split
+with the same suite:
+
+```bash
+evaluate-phylogfn \
+  --checkpoint runs/parsimony/best_checkpoint.pt \
+  --embeddings-dir data/embeddings/esm2_t12_35M \
+  --splits runs/parsimony/splits.json \
+  --split test \
+  --trajectories-per-family 100 \
+  --output runs/parsimony/test_metrics.json
+```
+
+Do not use repeated test runs to choose hyperparameters; that would turn the
+test set into another validation set.
 
 Generate alignments with known trees:
 
@@ -192,8 +280,8 @@ construction, Trajectory Balance training, sampling, and controlled evaluation.
 It does **not** yet establish that the method improves over standard phylogenetic
 software. A defensible study still needs held-out PANTHER reference trees,
 IQ-TREE/RAxML comparisons under strong substitution models, taxon-count and
-distribution-shift experiments, posterior calibration tests, and ablations for
-mean pooling, the residue adapter, ESM model size, and reward choice. Species-tree
+distribution-shift experiments, posterior calibration tests, and Fitch-only,
+ESM-only, pair-dimension, ESM-model-size, and reward ablations. Species-tree
 inference and gene-tree/species-tree reconciliation are outside the current
 task.
 

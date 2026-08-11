@@ -3,7 +3,7 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "phylogfn-data"
+name = "phylogfn"
 version = "0.1.0"
 description = "Residue-aware conditional GFlowNet for protein gene-tree topology inference"
 requires-python = ">=3.10"
@@ -24,15 +24,16 @@ dev = [
 ]
 
 [project.scripts]
-prepare-phylo-data = "phylogfn_data.prepare:main"
-encode-esm2 = "phylogfn_data.esm2_encode:main"
-score-parsimony = "phylogfn_data.parsimony:main"
-train-phylogfn = "phylogfn_data.train:main"
-sample-phylogfn = "phylogfn_data.sample:main"
-simulate-phylo-data = "phylogfn_data.simulate:main"
-build-nj-tree = "phylogfn_data.baseline:main"
-compare-phylo-trees = "phylogfn_data.tree_metrics:main"
-score-likelihood = "phylogfn_data.likelihood:main"
+prepare-phylo-data = "phylogfn.data.prepare:main"
+encode-esm2 = "phylogfn.data.esm2_encode:main"
+score-parsimony = "phylogfn.phylo.parsimony:main"
+train-phylogfn = "phylogfn.train:main"
+sample-phylogfn = "phylogfn.sample:main"
+evaluate-phylogfn = "phylogfn.evaluation:main"
+simulate-phylo-data = "phylogfn.data.simulate:main"
+build-nj-tree = "phylogfn.phylo.baseline:main"
+compare-phylo-trees = "phylogfn.phylo.tree_metrics:main"
+score-likelihood = "phylogfn.phylo.likelihood:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

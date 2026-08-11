@@ -3,8 +3,8 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
+.DS_Store
 data/downloads/
 data/extracted/
 data/processed/
 data/embeddings/
-

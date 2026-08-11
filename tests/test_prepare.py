@@ -5,8 +5,8 @@ import unittest
 from argparse import Namespace
 from pathlib import Path
 
-from phylogfn_data.fasta import FastaRecord, read_fasta
-from phylogfn_data.prepare import (
+from phylogfn.data.fasta import FastaRecord, read_fasta
+from phylogfn.data.prepare import (
     alignment_statistics,
     deduplicate_records,
     passes_alignment_filters,

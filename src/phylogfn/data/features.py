@@ -31,18 +31,26 @@ class AlignedFamilyFeatures:
 
     @property
     def num_sequences(self) -> int:
+        """Number of gene-tree leaves in the family."""
+
         return len(self.identifiers)
 
     @property
     def alignment_length(self) -> int:
+        """Number of columns in the shared MSA coordinate system."""
+
         return int(self.residue_mask.shape[1])
 
     @property
     def embedding_dim(self) -> int:
+        """Width of each stored ESM-2 residue representation."""
+
         return int(self.residue_embeddings.shape[2])
 
 
 def _amino_acid_index(character: str) -> int:
+    """Map an aligned character to residue, gap, or unknown vocabulary index."""
+
     if character in GAP_CHARS:
         return GAP_INDEX
     return AMINO_ACID_INDEX.get(character, UNKNOWN_INDEX)

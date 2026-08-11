@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .fasta import GAP_CHARS, STANDARD_AMINO_ACIDS, read_fasta
+from ..data.fasta import GAP_CHARS, STANDARD_AMINO_ACIDS, read_fasta
 
 
 AMINO_ACIDS = tuple(sorted(STANDARD_AMINO_ACIDS))
@@ -26,20 +26,30 @@ AMBIGUOUS_STATES = {
 
 @dataclass
 class TreeNode:
+    """Minimal rooted tree node used for Newick I/O and topology scoring."""
+
     name: str | None = None
     children: list["TreeNode"] = field(default_factory=list)
 
     @property
     def is_leaf(self) -> bool:
+        """Return whether the node has no children."""
+
         return not self.children
 
 
 class _NewickParser:
+    """Recursive-descent parser for the Newick subset used by this project."""
+
     def __init__(self, text: str) -> None:
+        """Initialize parsing state over one Newick string."""
+
         self.text = text
         self.position = 0
 
     def parse(self) -> TreeNode:
+        """Parse one complete tree and reject trailing non-comment content."""
+
         node = self._subtree()
         self._space_and_comments()
         if self._peek() == ";":
@@ -50,6 +60,8 @@ class _NewickParser:
         return node
 
     def _subtree(self) -> TreeNode:
+        """Parse one leaf or parenthesized internal subtree."""
+
         self._space_and_comments()
         children: list[TreeNode] = []
         if self._peek() == "(":
@@ -75,6 +87,8 @@ class _NewickParser:
         return TreeNode(name=name or None, children=children)
 
     def _label(self) -> str:
+        """Parse an optional quoted or unquoted node label."""
+
         self._space_and_comments()
         if self._peek() in {"'", '"'}:
             quote = self._peek()
@@ -97,6 +111,8 @@ class _NewickParser:
         return self.text[start : self.position]
 
     def _branch_length(self) -> None:
+        """Validate and consume a branch length, which scoring later ignores."""
+
         self._space_and_comments()
         start = self.position
         while self.position < len(self.text) and self.text[self.position] not in ",);[\t\r\n ":
@@ -109,6 +125,8 @@ class _NewickParser:
             raise ValueError(f"Invalid branch length {self.text[start:self.position]!r}") from error
 
     def _space_and_comments(self) -> None:
+        """Skip whitespace and bracketed Newick comments."""
+
         while True:
             while self.position < len(self.text) and self.text[self.position].isspace():
                 self.position += 1
@@ -120,14 +138,20 @@ class _NewickParser:
             self.position = end + 1
 
     def _peek(self) -> str:
+        """Return the current character without advancing the parser."""
+
         return self.text[self.position] if self.position < len(self.text) else ""
 
 
 def parse_newick(text: str) -> TreeNode:
+    """Parse a Newick string into the project's minimal tree representation."""
+
     return _NewickParser(text).parse()
 
 
 def leaf_names(tree: TreeNode) -> list[str]:
+    """Collect terminal labels in traversal order."""
+
     if tree.is_leaf:
         assert tree.name is not None
         return [tree.name]
@@ -138,7 +162,11 @@ def leaf_names(tree: TreeNode) -> list[str]:
 
 
 def tree_to_newick(tree: TreeNode, terminate: bool = True) -> str:
+    """Serialize topology and labels to Newick without branch lengths."""
+
     def quote(name: str) -> str:
+        """Quote labels containing Newick punctuation or whitespace."""
+
         if any(character in name for character in "(),:;[]'\t\r\n "):
             return "'" + name.replace("'", "''") + "'"
         return name
@@ -151,7 +179,9 @@ def tree_to_newick(tree: TreeNode, terminate: bool = True) -> str:
     return text + (";" if terminate else "")
 
 
-def _allowed_states(character: str) -> frozenset[str]:
+def allowed_states(character: str) -> frozenset[str]:
+    """Resolve a residue, ambiguity code, or missing value to allowed states."""
+
     if character in GAP_CHARS or character == "?":
         return STANDARD_AMINO_ACIDS
     if character in STANDARD_AMINO_ACIDS:
@@ -187,11 +217,13 @@ def parsimony_score(tree: TreeNode, sequences: dict[str, str]) -> int:
     infinity = np.int32(len(sequences) + 1)
 
     def costs(node: TreeNode) -> np.ndarray:
+        """Compute per-site Sankoff costs for every possible state at a node."""
+
         if node.is_leaf:
             assert node.name is not None
             result = np.full((alignment_length, len(AMINO_ACIDS)), infinity, dtype=np.int32)
             for column, character in enumerate(sequences[node.name].upper()):
-                for amino_acid in _allowed_states(character):
+                for amino_acid in allowed_states(character):
                     result[column, AMINO_ACID_INDEX[amino_acid]] = 0
             return result
 
@@ -220,6 +252,8 @@ def parsimony_log_reward(
     beta: float = 1.0,
     normalized: bool = True,
 ) -> float:
+    """Convert raw or normalized parsimony into an exponential log reward."""
+
     if beta <= 0:
         raise ValueError("beta must be positive")
     score = (
@@ -231,6 +265,8 @@ def parsimony_log_reward(
 
 
 def score_files(alignment_path: Path, tree_path: Path) -> int:
+    """Load an alignment and Newick tree and return their parsimony score."""
+
     records = read_fasta(alignment_path)
     sequences = {record.identifier: record.sequence for record in records}
     if len(sequences) != len(records):
@@ -240,6 +276,8 @@ def score_files(alignment_path: Path, tree_path: Path) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Define command-line options for standalone parsimony scoring."""
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--alignment", type=Path, required=True, help="Aligned protein FASTA")
     parser.add_argument("--tree", type=Path, required=True, help="Candidate tree in Newick format")
@@ -255,6 +293,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Score a candidate tree and print raw, normalized, and reward values."""
+
     args = build_parser().parse_args(argv)
     if args.beta <= 0:
         raise SystemExit("--beta must be positive")

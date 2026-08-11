@@ -12,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .fasta import GAP_CHARS, STANDARD_AMINO_ACIDS, read_fasta
+from ..data.fasta import GAP_CHARS, STANDARD_AMINO_ACIDS, read_fasta
 from .parsimony import AMBIGUOUS_STATES, TreeNode, leaf_names, parse_newick
 
 
@@ -21,6 +21,8 @@ AMINO_ACID_INDEX = {amino_acid: index for index, amino_acid in enumerate(AMINO_A
 
 
 def transition_matrix(branch_length: float) -> np.ndarray:
+    """Return the equal-frequency Poisson-20 transition matrix for one branch."""
+
     if branch_length <= 0:
         raise ValueError("Branch length must be positive")
     decay = np.exp(-(20.0 / 19.0) * branch_length)
@@ -32,6 +34,8 @@ def transition_matrix(branch_length: float) -> np.ndarray:
 
 
 def _leaf_partials(sequence: str) -> np.ndarray:
+    """Encode observed and ambiguous residues as per-site likelihood vectors."""
+
     partials = np.zeros((len(sequence), 20), dtype=np.float64)
     for column, character in enumerate(sequence.upper()):
         if character in GAP_CHARS or character in {"?", "X"}:
@@ -46,6 +50,8 @@ def _leaf_partials(sequence: str) -> np.ndarray:
 def poisson_log_likelihood(
     tree: TreeNode, sequences: dict[str, str], branch_length: float
 ) -> float:
+    """Evaluate a topology with scaled Felsenstein pruning at one branch length."""
+
     names = leaf_names(tree)
     if set(names) != set(sequences) or len(names) != len(sequences):
         raise ValueError("Tree and alignment must contain identical unique leaf sets")
@@ -55,6 +61,8 @@ def poisson_log_likelihood(
     transition = transition_matrix(branch_length)
 
     def partials(node: TreeNode) -> tuple[np.ndarray, np.ndarray]:
+        """Recursively return normalized conditionals and accumulated log scales."""
+
         if node.is_leaf:
             assert node.name is not None
             sequence_partials = _leaf_partials(sequences[node.name])
@@ -81,6 +89,8 @@ def optimize_shared_branch_length(
     sequences: dict[str, str],
     candidates: np.ndarray | None = None,
 ) -> tuple[float, float]:
+    """Grid-search one shared branch length and return its best likelihood."""
+
     if candidates is None:
         candidates = np.geomspace(1e-3, 3.0, 48)
     scored = [
@@ -93,12 +103,16 @@ def optimize_shared_branch_length(
 def normalized_poisson_log_reward(
     tree: TreeNode, sequences: dict[str, str], *, beta: float = 1.0
 ) -> float:
+    """Normalize optimized log likelihood per observation and scale by beta."""
+
     _, log_likelihood = optimize_shared_branch_length(tree, sequences)
     observations = len(sequences) * len(next(iter(sequences.values())))
     return beta * log_likelihood / observations
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Score one alignment/tree pair with the Poisson-20 diagnostic oracle."""
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--alignment", type=Path, required=True)
     parser.add_argument("--tree", type=Path, required=True)

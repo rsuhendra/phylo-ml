@@ -1,3 +1,5 @@
+"""Small, dependency-free FASTA parsing and alignment-coordinate utilities."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -13,21 +15,29 @@ ALLOWED_AMINO_ACIDS = STANDARD_AMINO_ACIDS | frozenset("BXZJUO")
 
 @dataclass(frozen=True)
 class FastaRecord:
+    """One normalized FASTA record with identifier, full header, and sequence."""
+
     identifier: str
     description: str
     sequence: str
 
 
 def normalize_sequence(sequence: str) -> str:
+    """Remove whitespace and terminal-stop markers and normalize case."""
+
     return "".join(sequence.split()).upper().replace("*", "")
 
 
 def read_fasta(path: Path) -> list[FastaRecord]:
+    """Parse a FASTA file and reject blank headers or empty records."""
+
     records: list[FastaRecord] = []
     header: str | None = None
     sequence_parts: list[str] = []
 
     def emit() -> None:
+        """Finalize the record accumulated since the preceding header."""
+
         if header is None:
             return
         sequence = normalize_sequence("".join(sequence_parts))
@@ -56,6 +66,8 @@ def read_fasta(path: Path) -> list[FastaRecord]:
 
 
 def write_fasta(records: Iterable[FastaRecord], path: Path, width: int = 80) -> None:
+    """Write records to FASTA, creating parent directories when necessary."""
+
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         for record in records:
@@ -65,21 +77,29 @@ def write_fasta(records: Iterable[FastaRecord], path: Path, width: int = 80) -> 
 
 
 def discover_fastas(root: Path) -> Iterator[Path]:
+    """Yield supported FASTA files recursively in deterministic path order."""
+
     for path in sorted(root.rglob("*")):
         if path.is_file() and path.suffix.lower() in FASTA_SUFFIXES:
             yield path
 
 
 def ungap(sequence: str) -> str:
+    """Remove alignment gap characters while preserving residue order."""
+
     return "".join(character for character in sequence if character not in GAP_CHARS)
 
 
 def validate_protein(sequence: str) -> bool:
+    """Return whether a nonempty sequence contains only supported protein codes."""
+
     raw = ungap(sequence)
     return bool(raw) and set(raw) <= ALLOWED_AMINO_ACIDS
 
 
 def alignment_maps(aligned_sequence: str) -> tuple[list[int], list[int]]:
+    """Build inverse mappings between MSA columns and ungapped residue indices."""
+
     aligned_to_ungapped: list[int] = []
     ungapped_to_aligned: list[int] = []
     residue_index = 0
@@ -91,4 +111,3 @@ def alignment_maps(aligned_sequence: str) -> tuple[list[int], list[int]]:
             ungapped_to_aligned.append(column_index)
             residue_index += 1
     return aligned_to_ungapped, ungapped_to_aligned
-

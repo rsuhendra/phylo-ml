@@ -13,12 +13,16 @@ Split = tuple[str, ...]
 
 
 def unrooted_splits(tree: TreeNode) -> frozenset[Split]:
+    """Extract canonical nontrivial bipartitions independent of root placement."""
+
     leaves = frozenset(leaf_names(tree))
     if len(leaves) < 3:
         raise ValueError("Tree must contain at least three leaves")
     splits: set[Split] = set()
 
     def visit(node: TreeNode) -> frozenset[str]:
+        """Collect descendant leaves and record the corresponding edge split."""
+
         if node.is_leaf:
             assert node.name is not None
             return frozenset((node.name,))
@@ -38,6 +42,8 @@ def unrooted_splits(tree: TreeNode) -> frozenset[Split]:
 
 
 def robinson_foulds(first: TreeNode, second: TreeNode) -> tuple[int, float]:
+    """Return raw and normalized unrooted Robinson--Foulds distance."""
+
     first_leaves = set(leaf_names(first))
     second_leaves = set(leaf_names(second))
     if first_leaves != second_leaves:
@@ -50,6 +56,8 @@ def robinson_foulds(first: TreeNode, second: TreeNode) -> tuple[int, float]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Compare a predicted topology with a reference Newick tree."""
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tree", type=Path, required=True)
     parser.add_argument("--reference", type=Path, required=True)

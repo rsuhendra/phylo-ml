@@ -4,8 +4,8 @@ import unittest
 
 import numpy as np
 
-from phylogfn_data.baseline import neighbor_joining
-from phylogfn_data.parsimony import leaf_names
+from phylogfn.phylo.baseline import neighbor_joining
+from phylogfn.phylo.parsimony import leaf_names
 
 
 class BaselineTests(unittest.TestCase):

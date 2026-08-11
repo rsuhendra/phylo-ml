@@ -9,14 +9,15 @@ from typing import Any
 import torch
 from torch import Tensor, nn
 
-from .adapter import ResidueAwareAdapter
+from .adapter import ResiduePairAdapter
 from .forward_policy import ForwardPolicy
-from .parsimony import parsimony_log_reward
-from .tree_env import TreeState
+from ..phylo.tree_env import TreeState
 
 
 @dataclass(frozen=True)
 class TrajectoryResult:
+    """Terminal state and differentiable statistics for one sampled trajectory."""
+
     terminal_state: TreeState
     log_forward: Tensor
     log_backward: Tensor
@@ -26,38 +27,44 @@ class TrajectoryResult:
 
 
 class ConditionalPhyloGFN(nn.Module):
-    """Residue-aware family encoder plus a conditional tree-construction GFlowNet."""
+    """Residue-aware encoder and conditional tree-construction GFlowNet.
+
+    ESM-derived pair evidence conditions the forward policy. The terminal
+    phylogenetic reward is non-differentiable; Trajectory Balance propagates its
+    signal through sampled forward log-probabilities and the learned ``log Z``.
+    """
 
     def __init__(
         self,
         esm_dim: int,
         *,
         adapter_dim: int = 128,
+        pair_dim: int = 64,
         policy_dim: int = 256,
+        fitch_dim: int = 64,
         num_heads: int = 4,
-        sequence_layers: int = 1,
         dropout: float = 0.1,
-        max_alignment_length: int = 2048,
     ) -> None:
+        """Assemble pair adapter, merge policy, and conditional partition head."""
+
         super().__init__()
         self.config = {
             "esm_dim": esm_dim,
             "adapter_dim": adapter_dim,
+            "pair_dim": pair_dim,
             "policy_dim": policy_dim,
+            "fitch_dim": fitch_dim,
             "num_heads": num_heads,
-            "sequence_layers": sequence_layers,
             "dropout": dropout,
-            "max_alignment_length": max_alignment_length,
         }
-        self.adapter = ResidueAwareAdapter(
+        self.adapter = ResiduePairAdapter(
             esm_dim,
             adapter_dim,
+            pair_dim,
             num_heads=num_heads,
-            sequence_layers=sequence_layers,
             dropout=dropout,
-            max_alignment_length=max_alignment_length,
         )
-        self.forward_policy = ForwardPolicy(adapter_dim, policy_dim)
+        self.forward_policy = ForwardPolicy(pair_dim, policy_dim, fitch_dim)
         self.log_z_head = nn.Sequential(
             nn.Linear(adapter_dim, adapter_dim),
             nn.GELU(),
@@ -70,22 +77,21 @@ class ConditionalPhyloGFN(nn.Module):
         residue_embeddings: Tensor,
         residue_mask: Tensor,
         amino_acid_indices: Tensor,
-    ) -> tuple[dict[str, Tensor], Tensor, Tensor]:
-        leaf_matrix, family_context, site_weights = self.adapter(
+    ) -> tuple[Tensor, Tensor]:
+        """Convert aligned ESM residues into pair evidence and family ``log Z``."""
+
+        pair_matrix, family_context, _ = self.adapter(
             residue_embeddings, residue_mask, amino_acid_indices
         )
-        if len(identifiers) != leaf_matrix.shape[0]:
+        if len(identifiers) != pair_matrix.shape[0]:
             raise ValueError("Identifier count does not match adapter output")
-        leaf_features = {
-            identifier: leaf_matrix[index] for index, identifier in enumerate(identifiers)
-        }
         log_z = self.log_z_head(family_context).squeeze(-1)
-        return leaf_features, log_z, site_weights
+        return pair_matrix, log_z
 
     def sample_trajectory(
         self,
         identifiers: tuple[str, ...] | list[str],
-        leaf_features: dict[str, Tensor],
+        pair_matrix: Tensor,
         log_z: Tensor,
         sequences: dict[str, str],
         *,
@@ -94,7 +100,17 @@ class ConditionalPhyloGFN(nn.Module):
         temperature: float = 1.0,
         generator: Any = None,
     ) -> TrajectoryResult:
+        """Construct one topology and evaluate its Trajectory Balance residual."""
+
+        if beta <= 0:
+            raise ValueError("beta must be positive")
+        # The Python environment carries topology only. Tensorized Fitch state
+        # and accumulated parsimony live in the policy cache, avoiding the same
+        # per-site merge calculation on both CPU and accelerator.
         state = TreeState.initial(tuple(identifiers))
+        policy_cache = self.forward_policy.initialize_state_cache(
+            state, pair_matrix, identifiers, sequences=sequences
+        )
         zero = log_z.new_zeros(())
         log_forward = zero
         log_backward = zero
@@ -103,9 +119,11 @@ class ConditionalPhyloGFN(nn.Module):
         while not state.is_terminal:
             action, log_probability = self.forward_policy.sample_action(
                 state,
-                leaf_features,
+                pair_matrix,
+                identifiers,
                 temperature=temperature,
                 generator=generator,
+                cache=policy_cache,
             )
             child, reverse_index = state.step_with_reverse(action)
             backward_actions = child.valid_backward_actions()
@@ -113,15 +131,18 @@ class ConditionalPhyloGFN(nn.Module):
                 raise RuntimeError("Forward merge did not produce a valid reverse action")
             log_forward = log_forward + log_probability
             log_backward = log_backward - math.log(len(backward_actions))
+            policy_cache = self.forward_policy.advance_state_cache(
+                policy_cache, action, child
+            )
             state = child
             num_actions += 1
 
         if reward == "parsimony":
-            log_reward = parsimony_log_reward(
-                state.terminal_tree(), sequences, beta=beta, normalized=True
-            )
+            raw_score = self.forward_policy.terminal_fitch_score(policy_cache)
+            observations = len(next(iter(sequences.values()))) * max(1, len(sequences) - 1)
+            log_reward = -beta * raw_score / observations
         elif reward == "poisson":
-            from .likelihood import normalized_poisson_log_reward
+            from ..phylo.likelihood import normalized_poisson_log_reward
 
             log_reward = normalized_poisson_log_reward(
                 state.terminal_tree(), sequences, beta=beta

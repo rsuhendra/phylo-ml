@@ -7,13 +7,13 @@ import json
 from collections import Counter
 from pathlib import Path
 
-import numpy as np
-
-from .features import load_aligned_esm2
+from .data.features import load_aligned_esm2
 from .train import choose_device, family_tensors
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Define checkpoint, family, sampling, and output options."""
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--family-dir", type=Path, required=True)
@@ -21,13 +21,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num-samples", type=int, default=100)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--beta", type=float, default=10.0)
-    parser.add_argument("--reward", choices=("parsimony", "poisson"), default="parsimony")
+    parser.add_argument("--reward", choices=("parsimony",), default="parsimony")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--seed", type=int, default=17)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Load one checkpoint and summarize sampled topology frequencies."""
+
     args = build_parser().parse_args(argv)
     if args.num_samples < 1:
         raise SystemExit("--num-samples must be positive")
@@ -35,10 +37,15 @@ def main(argv: list[str] | None = None) -> int:
         import torch
     except ImportError as error:
         raise SystemExit("Install training dependencies with: python -m pip install -e '.[gfn]'") from error
-    from .gflownet import ConditionalPhyloGFN
+    from .model.gflownet import ConditionalPhyloGFN
 
     device = choose_device(torch, args.device)
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
+    if checkpoint.get("architecture") != "pair_fitch_v1":
+        raise SystemExit(
+            "This checkpoint predates the pairwise-ESM/Fitch architecture. "
+            "Retrain the model with the current train-phylo command."
+        )
     model = ConditionalPhyloGFN(**checkpoint["model_config"]).to(device)
     model.load_state_dict(checkpoint["model_state"])
     model.eval()
@@ -52,13 +59,13 @@ def main(argv: list[str] | None = None) -> int:
     counts: Counter[str] = Counter()
     rewards: dict[str, float] = {}
     with torch.inference_mode():
-        leaf_features, log_z, site_weights = model.encode_family(
+        pair_matrix, log_z = model.encode_family(
             family.identifiers, embeddings, mask, amino_acids
         )
         for _ in range(args.num_samples):
             trajectory = model.sample_trajectory(
                 family.identifiers,
-                leaf_features,
+                pair_matrix,
                 log_z,
                 sequences,
                 beta=args.beta,
@@ -74,7 +81,6 @@ def main(argv: list[str] | None = None) -> int:
         "family_id": family.family_id,
         "num_samples": args.num_samples,
         "conditional_log_z": float(log_z.cpu()),
-        "site_weights": np.asarray(site_weights.cpu()).tolist(),
         "trees": [
             {
                 "newick": newick,

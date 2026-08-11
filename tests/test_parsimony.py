@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from phylogfn_data.parsimony import (
+from phylogfn.phylo.parsimony import (
     normalized_parsimony_score,
     parse_newick,
     parsimony_log_reward,

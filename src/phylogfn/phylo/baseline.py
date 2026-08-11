@@ -7,11 +7,13 @@ from pathlib import Path
 
 import numpy as np
 
-from .fasta import GAP_CHARS, read_fasta
+from ..data.fasta import GAP_CHARS, read_fasta
 from .parsimony import TreeNode, tree_to_newick
 
 
 def p_distance(first: str, second: str) -> float:
+    """Compute mismatch fraction over comparable nongap, non-unknown sites."""
+
     comparable = [
         (left, right)
         for left, right in zip(first, second)
@@ -23,6 +25,8 @@ def p_distance(first: str, second: str) -> float:
 
 
 def neighbor_joining(names: list[str], distances: np.ndarray) -> TreeNode:
+    """Construct a deterministic Neighbor-Joining topology from a distance matrix."""
+
     if len(names) < 3 or distances.shape != (len(names), len(names)):
         raise ValueError("Neighbor Joining requires an n-by-n matrix for at least three leaves")
     active = list(range(len(names)))
@@ -36,6 +40,8 @@ def neighbor_joining(names: list[str], distances: np.ndarray) -> TreeNode:
     next_index = len(names)
 
     def distance(i: int, j: int) -> float:
+        """Read a symmetric active-cluster distance."""
+
         return 0.0 if i == j else matrix[(min(i, j), max(i, j))]
 
     while len(active) > 2:
@@ -64,6 +70,8 @@ def neighbor_joining(names: list[str], distances: np.ndarray) -> TreeNode:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Build and write a Neighbor-Joining baseline from an aligned FASTA."""
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--alignment", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)

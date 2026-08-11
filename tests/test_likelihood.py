@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from phylogfn_data.likelihood import optimize_shared_branch_length, poisson_log_likelihood
-from phylogfn_data.parsimony import parse_newick
+from phylogfn.phylo.likelihood import optimize_shared_branch_length, poisson_log_likelihood
+from phylogfn.phylo.parsimony import parse_newick
 
 
 class LikelihoodTests(unittest.TestCase):

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from phylogfn_data.features import GAP_INDEX, load_aligned_esm2, load_pooled_esm2
+from phylogfn.data.features import GAP_INDEX, load_aligned_esm2, load_pooled_esm2
 
 
 class FeatureTests(unittest.TestCase):

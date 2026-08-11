@@ -1,3 +1,5 @@
+"""Encode ungapped MSA records with frozen ESM-2 and retain alignment maps."""
+
 from __future__ import annotations
 
 import argparse
@@ -13,6 +15,8 @@ from .fasta import alignment_maps, discover_fastas, read_fasta, ungap, validate_
 
 
 def choose_device(torch: Any, requested: str) -> str:
+    """Resolve ``auto`` to CUDA, Apple MPS, or CPU in priority order."""
+
     if requested != "auto":
         return requested
     if torch.cuda.is_available():
@@ -23,6 +27,8 @@ def choose_device(torch: Any, requested: str) -> str:
 
 
 def batches(items: list[Any], batch_size: int) -> list[list[Any]]:
+    """Partition a list into consecutive inference batches."""
+
     return [items[start : start + batch_size] for start in range(0, len(items), batch_size)]
 
 
@@ -39,6 +45,12 @@ def encode_family(
     model_name: str,
     overwrite: bool,
 ) -> None:
+    """Encode one aligned family and atomically save residues plus metadata.
+
+    ESM-2 sees ungapped proteins. The output metadata records exact inverse maps
+    so residue embeddings can later be scattered back onto the original MSA.
+    """
+
     family_id = fasta_path.stem
     family_dir = output_root / family_id
     embeddings_path = family_dir / "embeddings.npy"
@@ -132,6 +144,8 @@ def encode_family(
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Define command-line options for frozen ESM-2 feature extraction."""
+
     parser = argparse.ArgumentParser(
         description="Encode ungapped proteins from aligned FASTA files with frozen ESM-2."
     )
@@ -147,6 +161,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Load ESM-2 once and encode every discovered aligned protein family."""
+
     args = build_parser().parse_args(argv)
     try:
         import torch
@@ -190,4 +206,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

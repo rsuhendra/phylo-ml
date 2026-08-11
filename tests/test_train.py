@@ -12,8 +12,8 @@ try:
 except ImportError:  # pragma: no cover - exercised in lightweight environments
     torch = None
 
-from phylogfn_data.train import main
-from phylogfn_data.sample import main as sample_main
+from phylogfn.train import main
+from phylogfn.sample import main as sample_main
 
 
 @unittest.skipIf(torch is None, "PyTorch is not installed in the lightweight test environment")
@@ -61,8 +61,12 @@ class TrainingTests(unittest.TestCase):
                         "1",
                         "--adapter-dim",
                         "8",
+                        "--pair-dim",
+                        "5",
                         "--policy-dim",
                         "12",
+                        "--fitch-dim",
+                        "4",
                         "--num-heads",
                         "2",
                         "--dropout",
@@ -81,7 +85,9 @@ class TrainingTests(unittest.TestCase):
                 output_dir / "checkpoint.pt", map_location="cpu", weights_only=False
             )
             self.assertEqual(checkpoint["epoch"], 1)
+            self.assertEqual(checkpoint["architecture"], "pair_fitch_v1")
             self.assertEqual(checkpoint["model_config"]["esm_dim"], 6)
+            self.assertEqual(checkpoint["model_config"]["pair_dim"], 5)
             self.assertTrue((output_dir / "metrics.jsonl").is_file())
             self.assertTrue((output_dir / "splits.json").is_file())
 

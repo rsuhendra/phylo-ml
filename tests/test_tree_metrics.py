@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from phylogfn_data.parsimony import parse_newick
-from phylogfn_data.tree_metrics import robinson_foulds
+from phylogfn.phylo.parsimony import parse_newick
+from phylogfn.phylo.tree_metrics import robinson_foulds
 
 
 class TreeMetricTests(unittest.TestCase):

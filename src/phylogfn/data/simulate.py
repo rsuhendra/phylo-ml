@@ -9,11 +9,13 @@ from pathlib import Path
 import numpy as np
 
 from .fasta import FastaRecord, write_fasta
-from .parsimony import AMINO_ACIDS, TreeNode, tree_to_newick
-from .tree_env import TreeState
+from ..phylo.parsimony import AMINO_ACIDS, TreeNode, tree_to_newick
+from ..phylo.tree_env import TreeState
 
 
 def random_tree(leaf_names: list[str], generator: np.random.Generator) -> TreeNode:
+    """Sample a random topology through uniformly chosen valid merge actions."""
+
     state = TreeState.initial(leaf_names)
     while not state.is_terminal:
         actions = state.valid_actions()
@@ -28,6 +30,8 @@ def simulate_sequences(
     branch_length: float,
     generator: np.random.Generator,
 ) -> dict[str, str]:
+    """Simulate equal-length proteins down a tree under Poisson-20 substitutions."""
+
     if sequence_length < 1 or branch_length <= 0:
         raise ValueError("Sequence length and branch length must be positive")
     alphabet = np.asarray(AMINO_ACIDS)
@@ -37,6 +41,8 @@ def simulate_sequences(
     leaves: dict[str, str] = {}
 
     def mutate(parent: np.ndarray) -> np.ndarray:
+        """Evolve one sequence across a branch of the configured length."""
+
         child = parent.copy()
         changes = generator.random(sequence_length) >= same_probability
         for position in np.flatnonzero(changes):
@@ -45,6 +51,8 @@ def simulate_sequences(
         return child
 
     def visit(node: TreeNode, sequence: np.ndarray) -> None:
+        """Recursively evolve sequences from the root to each terminal leaf."""
+
         if node.is_leaf:
             assert node.name is not None
             leaves[node.name] = "".join(alphabet[sequence])
@@ -57,6 +65,8 @@ def simulate_sequences(
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Define options for controlled topology-recovery simulations."""
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--num-families", type=int, default=100)
@@ -70,6 +80,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Generate simulated alignments, true trees, and a family manifest."""
+
     args = build_parser().parse_args(argv)
     if args.num_families < 1 or not 3 <= args.min_leaves <= args.max_leaves:
         raise SystemExit("Require positive families and 3 <= min leaves <= max leaves")

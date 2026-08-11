@@ -1,7 +1,7 @@
 import unittest
 from pathlib import Path
 
-from phylogfn_data.fasta import alignment_maps, read_fasta, ungap, validate_protein
+from phylogfn.data.fasta import alignment_maps, read_fasta, ungap, validate_protein
 
 
 FIXTURES = Path(__file__).parent / "fixtures" / "families"

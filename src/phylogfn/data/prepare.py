@@ -1,3 +1,5 @@
+"""Download, filter, align, rank, and manifest protein families for training."""
+
 from __future__ import annotations
 
 import argparse
@@ -25,6 +27,8 @@ PANTHER_FASTA_URL = (
 
 @dataclass(frozen=True)
 class FamilyManifest:
+    """Serializable provenance and alignment statistics for one retained family."""
+
     family_id: str
     source_path: str
     raw_fasta: str
@@ -41,12 +45,16 @@ class FamilyManifest:
 
 @dataclass(frozen=True)
 class PreparedCandidate:
+    """A filtered family staged until final ranking and output selection."""
+
     manifest: FamilyManifest
     staged_raw_fasta: Path
     staged_aligned_fasta: Path
 
 
 def download_file(url: str, destination: Path, chunk_size: int = 1024 * 1024) -> None:
+    """Download a URL atomically while reporting progress when size is known."""
+
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".part")
     request = urllib.request.Request(url, headers={"User-Agent": "phylogfn-data/0.1"})
@@ -65,6 +73,8 @@ def download_file(url: str, destination: Path, chunk_size: int = 1024 * 1024) ->
 
 
 def extract_tar_safely(archive: Path, destination: Path) -> None:
+    """Extract an archive after rejecting links and path-traversal members."""
+
     destination.mkdir(parents=True, exist_ok=True)
     destination_resolved = destination.resolve()
     with tarfile.open(archive, "r:*") as bundle:
@@ -80,6 +90,8 @@ def extract_tar_safely(archive: Path, destination: Path) -> None:
 
 
 def stable_family_id(path: Path, source_root: Path) -> str:
+    """Derive a filesystem-safe, deterministic identifier from a source path."""
+
     relative = path.relative_to(source_root)
     stem = relative.name
     for suffix in (".fasta", ".faa", ".fas", ".fa"):
@@ -93,6 +105,8 @@ def stable_family_id(path: Path, source_root: Path) -> str:
 
 
 def deduplicate_records(records: list[FastaRecord]) -> list[FastaRecord]:
+    """Remove duplicate identifiers while retaining identical biological sequences."""
+
     seen_ids: set[str] = set()
     kept: list[FastaRecord] = []
     for record in records:
@@ -115,6 +129,8 @@ def select_records(
     max_sequence_length: int,
     seed: int,
 ) -> list[FastaRecord] | None:
+    """Validate, filter, and deterministically subsample one raw family."""
+
     valid = [record for record in records if validate_protein(record.sequence)]
     valid = deduplicate_records(valid)
     if len(valid) < min_taxa:
@@ -140,6 +156,8 @@ def select_records(
 
 
 def run_mafft(input_fasta: Path, output_fasta: Path, threads: int, executable: str) -> None:
+    """Run MAFFT and atomically publish its alignment output."""
+
     if shutil.which(executable) is None:
         raise RuntimeError(
             f"Cannot find {executable!r} on PATH. Install MAFFT or pass --mafft /absolute/path/to/mafft."
@@ -183,6 +201,8 @@ def passes_alignment_filters(
     max_gap_fraction: float,
     min_sequence_coverage_required: float,
 ) -> bool:
+    """Return whether post-MSA length, gap, and coverage constraints all pass."""
+
     return (
         (max_alignment_length is None or alignment_length <= max_alignment_length)
         and min_gap_fraction <= gap_fraction <= max_gap_fraction
@@ -191,6 +211,8 @@ def passes_alignment_filters(
 
 
 def validate_prepare_arguments(args: argparse.Namespace) -> None:
+    """Reject inconsistent preparation arguments before performing any work."""
+
     source_dir = Path(args.source_dir)
     if not source_dir.is_dir():
         raise ValueError(f"Source directory does not exist: {source_dir}")
@@ -218,6 +240,8 @@ def validate_prepare_arguments(args: argparse.Namespace) -> None:
 
 
 def prepare_families(args: argparse.Namespace) -> int:
+    """Prepare eligible families, optionally ranking candidates by gap fraction."""
+
     validate_prepare_arguments(args)
     source_dir = Path(args.source_dir)
     output_dir = Path(args.output_dir)
@@ -349,6 +373,8 @@ def prepare_families(args: argparse.Namespace) -> int:
 
 
 def add_prepare_arguments(parser: argparse.ArgumentParser) -> None:
+    """Attach shared filtering and alignment options to a CLI parser."""
+
     parser.add_argument("--source-dir", required=True, help="Directory containing one FASTA per family")
     parser.add_argument("--output-dir", default="data/processed")
     parser.add_argument(
@@ -386,6 +412,8 @@ def add_prepare_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build download, preparation, and combined-workflow subcommands."""
+
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -429,6 +457,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def download_panther(data_root: Path, url: str, force: bool) -> Path:
+    """Download and safely extract the configured PANTHER family archive."""
+
     archive = data_root / "downloads" / Path(url).name
     extracted = data_root / "extracted" / f"panther-{PANTHER_VERSION}-fasta"
     if force or not archive.exists():
@@ -441,6 +471,8 @@ def download_panther(data_root: Path, url: str, force: bool) -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Dispatch the selected data-preparation command."""
+
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "download-panther":
